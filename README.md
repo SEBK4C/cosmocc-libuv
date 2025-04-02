@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project provides an experimental script to build the `libuv` library using the [Cosmopolitan Libc](https://github.com/jart/cosmopolitan) toolchain. The goal is to produce a static `libuv.a` library that leverages Cosmopolitan's "Compile Once, Run Anywhere" philosophy.
+This project provides an experimental script to build the [libuv library](https://github.com/libuv/libuv)  using the [Cosmopolitan Libc](https://github.com/jart/cosmopolitan) toolchain. The goal is to produce a static `libuv.a` library that leverages Cosmopolitan's "Compile Once, Run Anywhere" philosophy.
 
 **Disclaimer:** This is highly experimental. The build process and resulting library have not been rigorously tested on various platforms. It was created primarily as an exploration of combining `libuv` with Cosmopolitan. Use with caution and expect potential issues.
 
@@ -67,3 +67,10 @@ Given the experimental nature, contributions (bug reports, patches, testing resu
 The build scripts and patch file are provided under the MIT License.
 `libuv` itself is subject to its own licenses (primarily MIT). See the `./libuv/LICENSE` file after running the build script.
 Cosmopolitan Libc is provided under its own license (ISC).
+
+## Acknowledgements
+
+This project builds heavily upon the fantastic work of others. I extend our sincere thanks to:
+
+*   **The libuv team:** For creating and maintaining the robust, cross-platform asynchronous I/O library that forms the core of this effort. ([libuv GitHub](https://github.com/libuv/libuv))
+*   **Justine Tunney (jart) and contributors:** For the groundbreaking Cosmopolitan Libc project, which makes the "compile once, run anywhere" goal a possibility. ([Cosmopolitan GitHub](https://github.com/jart/cosmopolitan))

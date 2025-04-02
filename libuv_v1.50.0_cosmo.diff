@@ -1,0 +1,577 @@
+diff --git a/Makefile.am b/Makefile.am
+index 9b9e6be7..374831cd 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -433,8 +433,6 @@ libuv_la_SOURCES += src/unix/bsd-ifaddrs.c \
+                     src/unix/darwin-stub.h \
+                     src/unix/darwin-syscalls.h \
+                     src/unix/darwin.c \
+-                    src/unix/fsevents.c \
+-                    src/unix/kqueue.c \
+                     src/unix/proctitle.c \
+                     src/unix/random-getentropy.c
+ test_run_tests_LDFLAGS += -lutil
+diff --git a/configure.ac b/configure.ac
+index fc8316b8..11ca0a4e 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -13,7 +13,7 @@
+ # OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ 
+ AC_PREREQ(2.57)
+-AC_INIT([libuv], [1.50.0], [https://github.com/libuv/libuv/issues])
++AC_INIT([libuv], [1.50.0cosmo], [https://github.com/libuv/libuv/issues])
+ AC_CONFIG_MACRO_DIR([m4])
+ m4_include([m4/libuv-extra-automake-flags.m4])
+ m4_include([m4/as_case.m4])
+diff --git a/include/uv.h b/include/uv.h
+index f0ec376b..69d64a3d 100644
+--- a/include/uv.h
++++ b/include/uv.h
+@@ -190,10 +190,10 @@ struct uv__queue {
+   XX(RANDOM, random)                                                          \
+ 
+ typedef enum {
+-#define XX(code, _) UV_ ## code = UV__ ## code,
++#define XX(code, _) UV_ ## code, /* Let the compiler assign default values */
+   UV_ERRNO_MAP(XX)
+ #undef XX
+-  UV_ERRNO_MAX = UV__EOF - 1
++  UV_ERRNO_MAX /* Let this also get a default value */
+ } uv_errno_t;
+ 
+ typedef enum {
+diff --git a/src/unix/bsd-ifaddrs.c b/src/unix/bsd-ifaddrs.c
+index 11ca9559..3918cfcf 100644
+--- a/src/unix/bsd-ifaddrs.c
++++ b/src/unix/bsd-ifaddrs.c
+@@ -27,7 +27,9 @@
+ 
+ #include <ifaddrs.h>
+ #include <net/if.h>
+-#if !defined(__CYGWIN__) && !defined(__MSYS__) && !defined(__GNU__)
++#include <netinet/in.h>
++#include <arpa/inet.h>
++#if defined(AF_LINK) && AF_LINK != 0
+ #include <net/if_dl.h>
+ #endif
+ 
+@@ -41,6 +43,7 @@ static int uv__ifaddr_exclude(struct ifaddrs *ent, int exclude_type) {
+   if (ent->ifa_addr == NULL)
+     return 1;
+ #if !defined(__CYGWIN__) && !defined(__MSYS__) && !defined(__GNU__)
++#if defined(AF_LINK) && AF_LINK != 0
+   /*
+    * If `exclude_type` is `UV__EXCLUDE_IFPHYS`, return whether `sa_family`
+    * equals `AF_LINK`. Otherwise, the result depends on the operating
+@@ -49,14 +52,17 @@ static int uv__ifaddr_exclude(struct ifaddrs *ent, int exclude_type) {
+   if (exclude_type == UV__EXCLUDE_IFPHYS)
+     return (ent->ifa_addr->sa_family != AF_LINK);
+ #endif
++#endif
+ #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__DragonFly__) || \
+     defined(__HAIKU__)
+   /*
+    * On BSD getifaddrs returns information related to the raw underlying
+    * devices. We're not interested in this information.
+    */
++#if defined(AF_LINK) && AF_LINK != 0
+   if (ent->ifa_addr->sa_family == AF_LINK)
+     return 1;
++#endif
+ #elif defined(__NetBSD__) || defined(__OpenBSD__)
+   if (ent->ifa_addr->sa_family != PF_INET &&
+       ent->ifa_addr->sa_family != PF_INET6)
+@@ -127,6 +133,7 @@ int uv_interface_addresses(uv_interface_address_t** addresses, int* count) {
+   }
+ 
+ #if !(defined(__CYGWIN__) || defined(__MSYS__)) && !defined(__GNU__)
++#if defined(AF_LINK) && AF_LINK != 0
+   /* Fill in physical addresses for each interface */
+   for (ent = addrs; ent != NULL; ent = ent->ifa_next) {
+     if (uv__ifaddr_exclude(ent, UV__EXCLUDE_IFPHYS))
+@@ -143,6 +150,7 @@ int uv_interface_addresses(uv_interface_address_t** addresses, int* count) {
+       address++;
+     }
+   }
++#endif
+ #endif
+ 
+   freeifaddrs(addrs);
+diff --git a/src/unix/darwin-proctitle.c b/src/unix/darwin-proctitle.c
+index 5e564297..a61b4500 100644
+--- a/src/unix/darwin-proctitle.c
++++ b/src/unix/darwin-proctitle.c
+@@ -26,12 +26,25 @@
+ #include <pthread.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <unistd.h>
+ 
++/* Define TARGET_OS_IPHONE to 0 for Cosmo build */
++#ifndef TARGET_OS_IPHONE
++#define TARGET_OS_IPHONE 0
++#endif
++
++#if 0 /* Prevent include of missing header */
+ #include <TargetConditionals.h>
++#endif
+ 
+ #if !TARGET_OS_IPHONE
+ #include "darwin-stub.h"
++#if 0 /* Header not available in Cosmo */
++#include <crt_externs.h>
+ #endif
++#endif
++
++static uv_mutex_t process_title_mutex;
+ 
+ int uv__set_process_title(const char* title) {
+ #if TARGET_OS_IPHONE
+diff --git a/src/unix/darwin.c b/src/unix/darwin.c
+index 009efbef..ae77d31c 100644
+--- a/src/unix/darwin.c
++++ b/src/unix/darwin.c
+@@ -25,20 +25,17 @@
+ #include <stdint.h>
+ #include <errno.h>
+ 
+-#include <mach/mach.h>
+-#include <mach/mach_time.h>
+-#include <mach-o/dyld.h> /* _NSGetExecutablePath */
+ #include <sys/resource.h>
+-#include <sys/sysctl.h>
+ #include <unistd.h>  /* sysconf */
+ 
+-static uv_once_t once = UV_ONCE_INIT;
+-static mach_timebase_info_data_t timebase;
+-
++#include <string.h>
++#include <sys/time.h>
++#include <sys/types.h>
++#include <pthread.h>
++#include <stdlib.h>
++#include <string.h>
+ 
+ int uv__platform_loop_init(uv_loop_t* loop) {
+-  loop->cf_state = NULL;
+-
+   if (uv__kqueue_init(loop))
+     return UV__ERR(errno);
+ 
+@@ -47,76 +44,46 @@ int uv__platform_loop_init(uv_loop_t* loop) {
+ 
+ 
+ void uv__platform_loop_delete(uv_loop_t* loop) {
+-  uv__fsevents_loop_delete(loop);
+ }
+ 
+ 
+-static void uv__hrtime_init_once(void) {
+-  if (KERN_SUCCESS != mach_timebase_info(&timebase))
+-    abort();
+-}
++uint64_t uv__hrtime(uv_clocktype_t type) {
++  struct timespec ts;
++  clockid_t clock_id = CLOCK_MONOTONIC;
+ 
++  /* uv_clocktype_t is currently ignored */
++  (void) type;
+ 
+-uint64_t uv__hrtime(uv_clocktype_t type) {
+-  uv_once(&once, uv__hrtime_init_once);
+-  return mach_continuous_time() * timebase.numer / timebase.denom;
++  if (clock_gettime(clock_id, &ts)) {
++    /* This should not happen, return 0 on failure */
++    return 0;
++  }
++
++  return (((uint64_t) ts.tv_sec) * 1000000000 + ts.tv_nsec);
+ }
+ 
+ 
+ int uv_exepath(char* buffer, size_t* size) {
+-  /* realpath(exepath) may be > PATH_MAX so double it to be on the safe side. */
+-  char abspath[PATH_MAX * 2 + 1];
+-  char exepath[PATH_MAX + 1];
+-  uint32_t exepath_size;
+-  size_t abspath_size;
+-
++  /* _NSGetExecutablePath is not available/reliable in Cosmopolitan */
+   if (buffer == NULL || size == NULL || *size == 0)
+     return UV_EINVAL;
+ 
+-  exepath_size = sizeof(exepath);
+-  if (_NSGetExecutablePath(exepath, &exepath_size))
+-    return UV_EIO;
+-
+-  if (realpath(exepath, abspath) != abspath)
+-    return UV__ERR(errno);
+-
+-  abspath_size = strlen(abspath);
+-  if (abspath_size == 0)
+-    return UV_EIO;
+-
+-  *size -= 1;
+-  if (*size > abspath_size)
+-    *size = abspath_size;
+-
+-  memcpy(buffer, abspath, *size);
+-  buffer[*size] = '\0';
+-
+-  return 0;
++  /* Return error, or potentially check program_executable_name if needed later */
++  *size = 0;
++  buffer[0] = '\0';
++  return UV_ENOSYS;
+ }
+ 
+ 
+ uint64_t uv_get_free_memory(void) {
+-  vm_statistics_data_t info;
+-  mach_msg_type_number_t count = sizeof(info) / sizeof(integer_t);
+-
+-  if (host_statistics(mach_host_self(), HOST_VM_INFO,
+-                      (host_info_t)&info, &count) != KERN_SUCCESS) {
+-    return 0;
+-  }
+-
+-  return (uint64_t) info.free_count * sysconf(_SC_PAGESIZE);
++  /* host_statistics not available, return 0 */
++  return 0;
+ }
+ 
+ 
+ uint64_t uv_get_total_memory(void) {
+-  uint64_t info;
+-  int which[] = {CTL_HW, HW_MEMSIZE};
+-  size_t size = sizeof(info);
+-
+-  if (sysctl(which, ARRAY_SIZE(which), &info, &size, NULL, 0))
+-    return 0;
+-
+-  return (uint64_t) info;
++  /* sysctl unavailable */
++  return 0;
+ }
+ 
+ 
+@@ -131,107 +98,49 @@ uint64_t uv_get_available_memory(void) {
+ 
+ 
+ void uv_loadavg(double avg[3]) {
+-  struct loadavg info;
+-  size_t size = sizeof(info);
+-  int which[] = {CTL_VM, VM_LOADAVG};
+-
+-  if (sysctl(which, ARRAY_SIZE(which), &info, &size, NULL, 0) < 0) return;
+-
+-  avg[0] = (double) info.ldavg[0] / info.fscale;
+-  avg[1] = (double) info.ldavg[1] / info.fscale;
+-  avg[2] = (double) info.ldavg[2] / info.fscale;
++  /* sysctl unavailable */
++  avg[0] = 0.0;
++  avg[1] = 0.0;
++  avg[2] = 0.0;
+ }
+ 
+ 
+ int uv_resident_set_memory(size_t* rss) {
+-  mach_msg_type_number_t count;
+-  task_basic_info_data_t info;
+-  kern_return_t err;
+-
+-  count = TASK_BASIC_INFO_COUNT;
+-  err = task_info(mach_task_self(),
+-                  TASK_BASIC_INFO,
+-                  (task_info_t) &info,
+-                  &count);
+-  (void) &err;
+-  /* task_info(TASK_BASIC_INFO) cannot really fail. Anything other than
+-   * KERN_SUCCESS implies a libuv bug.
+-   */
+-  assert(err == KERN_SUCCESS);
+-  *rss = info.resident_size;
+-
+-  return 0;
++  /* task_info not available, return error */
++  *rss = 0;
++  return UV_ENOSYS;
+ }
+ 
+ 
+ int uv_uptime(double* uptime) {
+-  time_t now;
+-  struct timeval info;
+-  size_t size = sizeof(info);
+-  static int which[] = {CTL_KERN, KERN_BOOTTIME};
+-
+-  if (sysctl(which, ARRAY_SIZE(which), &info, &size, NULL, 0))
+-    return UV__ERR(errno);
+-
+-  now = time(NULL);
+-  *uptime = now - info.tv_sec;
+-
+-  return 0;
++  /* sysctl unavailable */
++  return UV_ENOSYS;
+ }
+ 
+ int uv_cpu_info(uv_cpu_info_t** cpu_infos, int* count) {
+   unsigned int ticks = (unsigned int)sysconf(_SC_CLK_TCK),
+                multiplier = ((uint64_t)1000L / ticks);
+-  char model[512];
+-  uint64_t cpuspeed;
+-  size_t size;
+-  unsigned int i;
+-  natural_t numcpus;
+-  mach_msg_type_number_t msg_type;
+-  processor_cpu_load_info_data_t *info;
+   uv_cpu_info_t* cpu_info;
+ 
+-  size = sizeof(model);
+-  if (sysctlbyname("machdep.cpu.brand_string", &model, &size, NULL, 0) &&
+-      sysctlbyname("hw.model", &model, &size, NULL, 0)) {
+-    return UV__ERR(errno);
+-  }
+-
+-  cpuspeed = 0;
+-  size = sizeof(cpuspeed);
+-  sysctlbyname("hw.cpufrequency", &cpuspeed, &size, NULL, 0);
+-  if (cpuspeed == 0)
+-    /* If sysctl hw.cputype == CPU_TYPE_ARM64, the correct value is unavailable
+-     * from Apple, but we can hard-code it here to a plausible value. */
+-    cpuspeed = 2400000000U;
+-
+-  if (host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO, &numcpus,
+-                          (processor_info_array_t*)&info,
+-                          &msg_type) != KERN_SUCCESS) {
+-    return UV_EINVAL;  /* FIXME(bnoordhuis) Translate error. */
+-  }
+-
+-  *cpu_infos = uv__malloc(numcpus * sizeof(**cpu_infos));
++  /* sysctlbyname and host_processor_info might not work or return
++     meaningful info. Return minimal/dummy info. */
++  *count = 1;
++  *cpu_infos = uv__malloc(sizeof(**cpu_infos));
+   if (!(*cpu_infos)) {
+-    vm_deallocate(mach_task_self(), (vm_address_t)info, msg_type);
+-    return UV_ENOMEM;
+-  }
+-
+-  *count = numcpus;
+-
+-  for (i = 0; i < numcpus; i++) {
+-    cpu_info = &(*cpu_infos)[i];
+-
+-    cpu_info->cpu_times.user = (uint64_t)(info[i].cpu_ticks[0]) * multiplier;
+-    cpu_info->cpu_times.nice = (uint64_t)(info[i].cpu_ticks[3]) * multiplier;
+-    cpu_info->cpu_times.sys = (uint64_t)(info[i].cpu_ticks[1]) * multiplier;
+-    cpu_info->cpu_times.idle = (uint64_t)(info[i].cpu_ticks[2]) * multiplier;
+-    cpu_info->cpu_times.irq = 0;
+-
+-    cpu_info->model = uv__strdup(model);
+-    cpu_info->speed = (int)(cpuspeed / 1000000);
++     return UV_ENOMEM;
+   }
+-  vm_deallocate(mach_task_self(), (vm_address_t)info, msg_type);
++  cpu_info = *cpu_infos;
++  cpu_info->speed = 0;
++  cpu_info->model = uv__strdup("unknown");
++  cpu_info->cpu_times.user = 0;
++  cpu_info->cpu_times.nice = 0;
++  cpu_info->cpu_times.sys = 0;
++  cpu_info->cpu_times.idle = 0;
++  cpu_info->cpu_times.irq = 0;
++
++  /* Suppress unused variable warnings for the variables we removed/replaced */
++  (void) ticks;      /* Defined above, but not used in dummy code */
++  (void) multiplier; /* Defined above, but not used in dummy code */
+ 
+   return 0;
+ }
+diff --git a/src/unix/dl.c b/src/unix/dl.c
+index 80b3333a..1a0003dc 100644
+--- a/src/unix/dl.c
++++ b/src/unix/dl.c
+@@ -22,8 +22,11 @@
+ #include "uv.h"
+ #include "internal.h"
+ 
+-#include <dlfcn.h>
++#include <assert.h>
+ #include <errno.h>
++#include <stdlib.h>
++#include <cosmo.h>
++#include <dlfcn.h>
+ #include <string.h>
+ #include <locale.h>
+ 
+@@ -33,8 +36,15 @@ static int uv__dlerror(uv_lib_t* lib);
+ int uv_dlopen(const char* filename, uv_lib_t* lib) {
+   dlerror(); /* Reset error status. */
+   lib->errmsg = NULL;
+-  lib->handle = dlopen(filename, RTLD_LAZY);
+-  return lib->handle ? 0 : uv__dlerror(lib);
++  lib->handle = cosmo_dlopen(filename, RTLD_LAZY | RTLD_LOCAL);
++  if (lib->handle == NULL) {
++    /* Store custom cosmo error */
++    lib->errmsg = uv__strdup("cosmo_dlopen failed");
++    if (lib->errmsg == NULL)
++      return UV_ENOMEM;
++    return UV_ENOENT; /* Or another suitable error */
++  }
++  return 0;
+ }
+ 
+ 
+@@ -43,17 +53,29 @@ void uv_dlclose(uv_lib_t* lib) {
+   lib->errmsg = NULL;
+ 
+   if (lib->handle) {
+-    /* Ignore errors. No good way to signal them without leaking memory. */
+-    dlclose(lib->handle);
++    if (cosmo_dlclose(lib->handle)) {
++      /* uv_fatal_error is Windows-only. Log or ignore? */
++      /* uv_fatal_error(errno, "cosmo_dlclose"); */
++    }
+     lib->handle = NULL;
+   }
+ }
+ 
+ 
+ int uv_dlsym(uv_lib_t* lib, const char* name, void** ptr) {
+-  dlerror(); /* Reset error status. */
+-  *ptr = dlsym(lib->handle, name);
+-  return *ptr ? 0 : uv__dlerror(lib);
++  *ptr = cosmo_dlsym(lib->handle, name);
++
++  if (*ptr != NULL) {
++    /* Success, or symbol value is genuinely NULL. */
++    uv__free(lib->errmsg);
++    lib->errmsg = NULL;
++    return 0;
++  } else {
++    /* cosmo_dlsym failed or symbol not found/is NULL */
++    uv__free(lib->errmsg);
++    lib->errmsg = uv__strdup("cosmo_dlsym failed or symbol not found/is NULL");
++    return UV_EINVAL; /* Use UV_EINVAL as per previous patch */
++  }
+ }
+ 
+ 
+diff --git a/src/unix/getaddrinfo.c b/src/unix/getaddrinfo.c
+index b7075343..a0596ea0 100644
+--- a/src/unix/getaddrinfo.c
++++ b/src/unix/getaddrinfo.c
+@@ -224,29 +224,25 @@ void uv_freeaddrinfo(struct addrinfo* ai) {
+ 
+ 
+ int uv_if_indextoname(unsigned int ifindex, char* buffer, size_t* size) {
+-  char ifname_buf[UV_IF_NAMESIZE];
+-  size_t len;
++  /* Cosmopolitan doesn't provide if_indextoname. Return empty string. */
++  size_t len = 0;
++  (void) ifindex; /* Avoid unused parameter warning */
+ 
+-  if (buffer == NULL || size == NULL || *size == 0)
++  if (buffer == NULL || size == NULL)
+     return UV_EINVAL;
+ 
+-  if (if_indextoname(ifindex, ifname_buf) == NULL)
+-    return UV__ERR(errno);
+-
+-  len = strnlen(ifname_buf, sizeof(ifname_buf));
+-
+-  if (*size <= len) {
++  if (*size <= len) { /* Need space for at least the null terminator */
+     *size = len + 1;
+     return UV_ENOBUFS;
+   }
+ 
+-  memcpy(buffer, ifname_buf, len);
++  /* Write the empty string (just the null terminator) */
+   buffer[len] = '\0';
+   *size = len;
+ 
+   return 0;
+ }
+ 
+-int uv_if_indextoiid(unsigned int ifindex, char* buffer, size_t* size) {
+-  return uv_if_indextoname(ifindex, buffer, size);
++int uv_if_indextoiid(unsigned int ifindex, char* ifname, size_t* ifname_len) {
++  return uv_if_indextoname(ifindex, ifname, ifname_len);
+ }
+diff --git a/src/unix/udp.c b/src/unix/udp.c
+index 67c01f7d..c165d5dc 100644
+--- a/src/unix/udp.c
++++ b/src/unix/udp.c
+@@ -760,6 +760,7 @@ static int uv__udp_set_source_membership4(uv_udp_t* handle,
+                                           const char* interface_addr,
+                                           const struct sockaddr_in* source_addr,
+                                           uv_membership membership) {
++#if 0 /* Disable body for Cosmo */
+   struct ip_mreq_source mreq;
+   int optname;
+   int err;
+@@ -797,6 +798,8 @@ static int uv__udp_set_source_membership4(uv_udp_t* handle,
+   }
+ 
+   return 0;
++#endif /* Matching #if 0 */
++  return UV_ENOSYS; /* Should not be reached, but return error */
+ }
+ 
+ 
+@@ -805,6 +808,7 @@ static int uv__udp_set_source_membership6(uv_udp_t* handle,
+                                           const char* interface_addr,
+                                           const struct sockaddr_in6* source_addr,
+                                           uv_membership membership) {
++#if 0 /* Disable body for Cosmo */
+   struct group_source_req mreq;
+   struct sockaddr_in6 addr6;
+   int optname;
+@@ -846,6 +850,8 @@ static int uv__udp_set_source_membership6(uv_udp_t* handle,
+   }
+ 
+   return 0;
++#endif /* Matching #if 0 */
++  return UV_ENOSYS; /* Should not be reached, but return error */
+ }
+ #endif
+ 
+@@ -940,12 +946,15 @@ int uv_udp_set_source_membership(uv_udp_t* handle,
+                                  const char* interface_addr,
+                                  const char* source_addr,
+                                  uv_membership membership) {
+-#if !defined(__OpenBSD__) &&                                        \
+-    !defined(__NetBSD__) &&                                         \
+-    !defined(__ANDROID__) &&                                        \
+-    !defined(__DragonFly__) &&                                      \
+-    !defined(__QNX__) &&                                            \
++#if !defined(__OpenBSD__) && \
++    !defined(__NetBSD__) && \
++    !defined(__ANDROID__) && \
++    !defined(__DragonFly__) && \
++    !defined(__QNX__) && \
+     !defined(__GNU__)
++  /* Source-specific multicast is not supported on Cosmopolitan */
++  return UV_ENOSYS;
++
+   int err;
+   union uv__sockaddr mcast_addr;
+   union uv__sockaddr src_addr;
+diff --git a/src/uv-common.c b/src/uv-common.c
+index 60ff56b9..442e3919 100644
+--- a/src/uv-common.c
++++ b/src/uv-common.c
+@@ -289,7 +289,8 @@ int uv_ip6_addr(const char* ip, int port, struct sockaddr_in6* addr) {
+ #ifdef _WIN32
+     addr->sin6_scope_id = atoi(zone_index);
+ #else
+-    addr->sin6_scope_id = if_nametoindex(zone_index);
++    /* Cosmopolitan doesn't provide if_nametoindex. Use 0 as scope ID. */
++    addr->sin6_scope_id = 0;
+ #endif
+   }
+ 

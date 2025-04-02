@@ -25,8 +25,8 @@ The primary tool is the `build_libuv_cosmo.sh` script.
 
 1.  **Clone this repository:**
     ```bash
-    git clone <your-repo-url>
-    cd <your-repo-directory>
+    git clone https://github.com/SEBK4C/cosmocc-libuv.git
+    cd cosmocc-libuv
     ```
 
 2.  **Run the build script:**
